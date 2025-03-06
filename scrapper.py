@@ -8,6 +8,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import boto3
 
 # --- Configuration ---
 USERNAME = "cn255243"          # your agent ID
@@ -17,6 +18,9 @@ BASE_URL    = "https://h3c.mlspin.com"
 LOGIN_URL   = BASE_URL + "/signin.asp#ath"
 SEARCH_URL  = BASE_URL + "/tools/mshare/search.asp"
 RESULTS_URL = BASE_URL + "/tools/mshare/results.asp"
+
+# Define the S3 bucket name where results will be stored
+S3_BUCKET = "gh-scrapping"
 
 # Define the neighborhoods (adjust as needed)
 neighborhoods = {
@@ -111,7 +115,7 @@ def build_payload(neighborhood_value, year):
     }
     return payload
 
-# --- Step 4. Perform a search request and save results ---
+# --- Step 4. Perform a search request and save results to S3 ---
 def perform_search(session, neighborhood_value, year, save_dir):
     payload = build_payload(neighborhood_value, year)
     print(f"Performing search for year {year} with payload: {payload}")
@@ -121,12 +125,11 @@ def perform_search(session, neighborhood_value, year, save_dir):
     else:
         if "Enter Your Agent ID" in response.text:
             print("Warning: Received login page instead of search results.")
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        file_path = os.path.join(save_dir, f"results_{year}.html")
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(response.text)
-        print(f"Saved results for {year} to {file_path}")
+        # Upload the results to S3
+        s3 = boto3.client('s3')
+        s3_key = f"{save_dir}/results_{year}.html"
+        s3.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=response.text, ContentType='text/html')
+        print(f"Saved results for {year} to S3 bucket '{S3_BUCKET}' with key '{s3_key}'.")
 
 # --- Main Script ---
 def main():
