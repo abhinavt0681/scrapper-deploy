@@ -46,7 +46,7 @@ def selenium_login():
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # Optionally specify Chrome binary location if needed:
+    # If necessary, specify the location of your Chrome binary:
     # chrome_options.binary_location = '/usr/bin/google-chrome'
     
     service = Service(executable_path="./chromedriver")
@@ -58,7 +58,7 @@ def selenium_login():
     user_input = wait.until(EC.element_to_be_clickable((By.NAME, "user_name")))
     pass_input = wait.until(EC.element_to_be_clickable((By.NAME, "pass")))
     
-    # Optionally dismiss any overlay
+    # (Optionally, dismiss any overlay)
     time.sleep(2)
     try:
         ok_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[text()='OK']")))
@@ -88,7 +88,7 @@ def create_requests_session(driver):
     session = requests.Session()
     for cookie in driver.get_cookies():
         session.cookies.set(cookie["name"], cookie["value"])
-    # Mimic a real browser
+    # It can help to mimic a real browser
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                       "AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -122,8 +122,7 @@ def perform_search(session, neighborhood_value, year, save_dir):
     else:
         if "Enter Your Agent ID" in response.text:
             print("Warning: Received login page instead of search results.")
-        # Create directory structure locally (optional) before uploading to S3 if desired.
-        # Here we directly upload to S3.
+        # Upload the results to S3
         s3 = boto3.client('s3')
         s3_key = f"{save_dir}/results_{year}.html"
         s3.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=response.text, ContentType='text/html')
@@ -133,18 +132,14 @@ def perform_search(session, neighborhood_value, year, save_dir):
 def parse_option_text(option_text):
     """
     Given an option text like "Worthington, MA-Worthington Center", 
-    extract the town and the area (if available). Returns (town, area)
+    extract the town and the area (if available). Returns (town, area).
     If no area is provided, area will be None.
     """
-    # Remove any leading/trailing whitespace
     option_text = option_text.strip()
-    # Split on comma: first token is town
     parts = option_text.split(",")
     town = parts[0].strip()
     area = None
     if len(parts) > 1:
-        # The second part may contain the state and possibly a dash and area.
-        # Look for a dash:
         dash_parts = parts[1].split("-")
         if len(dash_parts) > 1:
             area = dash_parts[1].strip()
@@ -161,22 +156,21 @@ def main():
     # Step 2: Create a requests session with cookies from Selenium
     session = create_requests_session(driver)
     
-    # Optionally confirm session is active
+    # Optionally navigate to the search page in Selenium to confirm session is active
     driver.get(SEARCH_URL)
     time.sleep(2)
     
     # Loop over each option from the CSV
     for opt in options:
-        option_value = opt["option_value"]  # e.g., "42G"
-        option_text = opt["option_text"]      # e.g., "Worthington, MA-Worthington Center"
+        option_value = opt["option_value"]  # e.g., "ACTN"
+        option_text = opt["option_text"]      # e.g., "Acton, MA"
         town, area = parse_option_text(option_text)
         
-        # Construct the effective neighborhood key for multifamily:
-        # Append "_mf" to the option_value.
-        effective_value = option_value + "_mf"
+        # For multifamily, we now use the option_value directly (do not append _mf)
+        effective_value = option_value
         
         # Determine the save directory.
-        # We'll store in a folder structure: "mf/<town>" if no area; otherwise "mf/<town>/<area>"
+        # Group by town; if area is available, further create an "areas" subfolder.
         if area:
             save_dir = f"mf/{town}/{area}"
         else:
