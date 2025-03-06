@@ -4,6 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -28,9 +29,9 @@ neighborhoods = {
     "leominster_mf": "LMNS",
     "hopkinton_mf": "HPKN",
     "fitchburg_mf": "FTCH",
-    "quincy_mf":"QUIN",
-    "braintree_mf":"BRAI",
-    "belmont_mf":"BLMT"
+    "quincy_mf": "QUIN",
+    "braintree_mf": "BRAI",
+    "belmont_mf": "BLMT"
     # add more as needed...
 }
 
@@ -39,8 +40,15 @@ end_year   = 2025  # will loop 1995 to 2024
 
 # --- Step 1. Use Selenium to log in and get session cookies ---
 def selenium_login():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    # If necessary, specify the location of your Chrome binary:
+    # chrome_options.binary_location = '/usr/bin/google-chrome'
+    
     service = Service(executable_path="./chromedriver")
-    driver = webdriver.Chrome(service=service)
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     wait = WebDriverWait(driver, 10)
     
     driver.get(LOGIN_URL)
@@ -96,13 +104,8 @@ def build_payload(neighborhood_value, year):
         "TimeFrame": "",
         "StartDate": f"01/01/{year}",
         "EndDate": f"01/01/{year+1}",
-        # The search form uses a hidden field (tareaslisting) to hold selected towns.
-        # (In the browser you’d normally select a town which then populates this field.)
-        # Here we assume that sending the town’s value is enough.
         "tareaslisting": neighborhood_value,
-        # Also include property type if needed (e.g., for Single Family use "sf")
         "proptype": "mf",
-        # Some other hidden fields might be required; you may need to inspect the actual POST request.
         "Changes": "yes",
         "NumResults": "100",
     }
@@ -116,7 +119,6 @@ def perform_search(session, neighborhood_value, year, save_dir):
     if response.status_code != 200:
         print(f"Error: Received status code {response.status_code} for year {year}")
     else:
-        # Check if we got the login page again (e.g. by looking for a known login element)
         if "Enter Your Agent ID" in response.text:
             print("Warning: Received login page instead of search results.")
         if not os.path.exists(save_dir):
@@ -128,15 +130,13 @@ def perform_search(session, neighborhood_value, year, save_dir):
 
 # --- Main Script ---
 def main():
-    # Step 1: Log in with Selenium
+    # Step 1: Log in with Selenium (headless)
     driver = selenium_login()
-    # Now you can (optionally) close the Selenium browser if you don't need it further,
-    # but keep it open so that cookies are available.
     
-    # Step 2: Create a requests session with the cookies from Selenium
+    # Step 2: Create a requests session with cookies from Selenium
     session = create_requests_session(driver)
     
-    # (Optional) Navigate to the search page in Selenium so you know the session is active
+    # Optionally navigate to the search page in Selenium to confirm session is active
     driver.get(SEARCH_URL)
     time.sleep(2)
     
