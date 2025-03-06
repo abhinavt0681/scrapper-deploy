@@ -1,5 +1,6 @@
 import os
 import time
+import csv
 import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
@@ -22,25 +23,22 @@ RESULTS_URL = BASE_URL + "/tools/mshare/results.asp"
 # Define the S3 bucket name where results will be stored
 S3_BUCKET = "gh-scrapping"
 
-# Define the neighborhoods (adjust as needed)
-neighborhoods = {
-    "framingham_mf": "FRAM",
-    "andover_mf": "ANDO",
-    "southborough_mf": "SBRO",
-    "wayland_mf": "WAYL",
-    "ayer_mf": "AYER",
-    "groton_mf": "GRTN",
-    "leominster_mf": "LMNS",
-    "hopkinton_mf": "HPKN",
-    "fitchburg_mf": "FTCH",
-    "quincy_mf": "QUIN",
-    "braintree_mf": "BRAI",
-    "belmont_mf": "BLMT"
-    # add more as needed...
-}
-
+# Set the year range (will loop 1995 to 2024)
 start_year = 1995
-end_year   = 2025  # will loop 1995 to 2024
+end_year   = 2025  
+
+# --- Utility: Load options CSV ---
+def load_options(csv_filename):
+    """
+    Loads options from a CSV file and returns a list of dictionaries.
+    Each dictionary has keys: 'option_value' and 'option_text'.
+    """
+    options = []
+    with open(csv_filename, "r", encoding="utf-8") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            options.append(row)
+    return options
 
 # --- Step 1. Use Selenium to log in and get session cookies ---
 def selenium_login():
@@ -48,7 +46,7 @@ def selenium_login():
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # If necessary, specify the location of your Chrome binary:
+    # Optionally specify Chrome binary location if needed:
     # chrome_options.binary_location = '/usr/bin/google-chrome'
     
     service = Service(executable_path="./chromedriver")
@@ -60,7 +58,7 @@ def selenium_login():
     user_input = wait.until(EC.element_to_be_clickable((By.NAME, "user_name")))
     pass_input = wait.until(EC.element_to_be_clickable((By.NAME, "pass")))
     
-    # (Optionally, dismiss any overlay)
+    # Optionally dismiss any overlay
     time.sleep(2)
     try:
         ok_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[text()='OK']")))
@@ -77,11 +75,10 @@ def selenium_login():
     pass_input.send_keys(PASSWORD)
     driver.find_element(By.ID, "loginForm").submit()
     
-    # Wait until we are on the search page (or forced there)
+    # Wait until we are on the search page (or force navigation)
     try:
         wait.until(EC.url_contains("tools/mshare/search.asp"))
     except Exception:
-        # If we get redirected to a login error page, force navigation:
         driver.get(SEARCH_URL)
     print("Logged in successfully (or forced navigation to search page).")
     return driver
@@ -91,7 +88,7 @@ def create_requests_session(driver):
     session = requests.Session()
     for cookie in driver.get_cookies():
         session.cookies.set(cookie["name"], cookie["value"])
-    # It can help to mimic a real browser
+    # Mimic a real browser
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                       "AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -109,7 +106,7 @@ def build_payload(neighborhood_value, year):
         "StartDate": f"01/01/{year}",
         "EndDate": f"01/01/{year+1}",
         "tareaslisting": neighborhood_value,
-        "proptype": "mf",
+        "proptype": "mf",  # For multifamily
         "Changes": "yes",
         "NumResults": "100",
     }
@@ -125,29 +122,71 @@ def perform_search(session, neighborhood_value, year, save_dir):
     else:
         if "Enter Your Agent ID" in response.text:
             print("Warning: Received login page instead of search results.")
-        # Upload the results to S3
+        # Create directory structure locally (optional) before uploading to S3 if desired.
+        # Here we directly upload to S3.
         s3 = boto3.client('s3')
         s3_key = f"{save_dir}/results_{year}.html"
         s3.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=response.text, ContentType='text/html')
         print(f"Saved results for {year} to S3 bucket '{S3_BUCKET}' with key '{s3_key}'.")
 
+# --- Utility: Parse option text to extract town and area ---
+def parse_option_text(option_text):
+    """
+    Given an option text like "Worthington, MA-Worthington Center", 
+    extract the town and the area (if available). Returns (town, area)
+    If no area is provided, area will be None.
+    """
+    # Remove any leading/trailing whitespace
+    option_text = option_text.strip()
+    # Split on comma: first token is town
+    parts = option_text.split(",")
+    town = parts[0].strip()
+    area = None
+    if len(parts) > 1:
+        # The second part may contain the state and possibly a dash and area.
+        # Look for a dash:
+        dash_parts = parts[1].split("-")
+        if len(dash_parts) > 1:
+            area = dash_parts[1].strip()
+    return town, area
+
 # --- Main Script ---
 def main():
+    # Load options from CSV (e.g., options.csv)
+    options = load_options("options.csv")
+    
     # Step 1: Log in with Selenium (headless)
     driver = selenium_login()
     
     # Step 2: Create a requests session with cookies from Selenium
     session = create_requests_session(driver)
     
-    # Optionally navigate to the search page in Selenium to confirm session is active
+    # Optionally confirm session is active
     driver.get(SEARCH_URL)
     time.sleep(2)
     
-    # For each neighborhood, loop through the years and perform searches
-    for dir_name, neighborhood_value in neighborhoods.items():
-        print(f"\nProcessing neighborhood: {dir_name}")
+    # Loop over each option from the CSV
+    for opt in options:
+        option_value = opt["option_value"]  # e.g., "42G"
+        option_text = opt["option_text"]      # e.g., "Worthington, MA-Worthington Center"
+        town, area = parse_option_text(option_text)
+        
+        # Construct the effective neighborhood key for multifamily:
+        # Append "_mf" to the option_value.
+        effective_value = option_value + "_mf"
+        
+        # Determine the save directory.
+        # We'll store in a folder structure: "mf/<town>" if no area; otherwise "mf/<town>/<area>"
+        if area:
+            save_dir = f"mf/{town}/{area}"
+        else:
+            save_dir = f"mf/{town}"
+        
+        print(f"\nProcessing option: {option_text} -> effective value: {effective_value}, save_dir: {save_dir}")
+        
+        # Loop over each year in the defined range.
         for year in range(start_year, end_year):
-            perform_search(session, neighborhood_value, year, dir_name)
+            perform_search(session, effective_value, year, save_dir)
             time.sleep(0.5)  # small delay between requests
     
     driver.quit()
